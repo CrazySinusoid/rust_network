@@ -6,14 +6,22 @@ use crate::protocol::{Frame, FrameHeader, PacketType, HEADER_LEN, MAGIC, VERSION
 pub fn encode_frame(frame: &Frame) -> Vec<u8> {
     let mut buf = BytesMut::with_capacity(HEADER_LEN + frame.payload.len());
 
+    buf.put_slice(&encode_header(&frame.header));
+    buf.put_slice(&frame.payload);
+
+    buf.to_vec()
+}
+
+pub fn encode_header(header: &FrameHeader) -> Vec<u8> {
+    let mut buf = BytesMut::with_capacity(HEADER_LEN);
+
     buf.put_slice(&MAGIC);
     buf.put_u8(VERSION);
-    buf.put_u8(frame.header.packet_type.into());
-    buf.put_u8(frame.header.flags);
+    buf.put_u8(header.packet_type.into());
+    buf.put_u8(header.flags);
     buf.put_u8(HEADER_LEN as u8);
-    buf.put_u64(frame.header.session_id);
-    buf.put_u64(frame.header.sequence_number);
-    buf.put_slice(&frame.payload);
+    buf.put_u64(header.session_id);
+    buf.put_u64(header.sequence_number);
 
     buf.to_vec()
 }
@@ -72,6 +80,20 @@ mod tests {
 
         assert_eq!(decoded, frame);
         assert_eq!(encoded.len(), HEADER_LEN + 5);
+    }
+
+    #[test]
+    fn encoded_header_is_frame_prefix() {
+        let frame = Frame::new(
+            FrameHeader::new(PacketType::Data, FLAG_ENCRYPTED_PAYLOAD, 42, 7),
+            b"hello".to_vec(),
+        );
+
+        let header = encode_header(&frame.header);
+        let encoded = encode_frame(&frame);
+
+        assert_eq!(header.len(), HEADER_LEN);
+        assert_eq!(&encoded[..HEADER_LEN], header.as_slice());
     }
 
     #[test]

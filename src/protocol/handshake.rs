@@ -7,6 +7,8 @@ pub const SERVER_RANDOM_LEN: usize = 32;
 pub const AUTH_METHOD_PSK: u8 = 1;
 pub const CLIENT_HELLO_LEN: usize = 52;
 pub const SERVER_HELLO_LEN: usize = 44;
+pub const AUTH_CONFIRM_LEN: usize = 96;
+pub const AUTH_CONFIRM_MAGIC: [u8; 16] = *b"rvpn-auth-ok-v1!";
 pub const MIN_MTU: u16 = 576;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +26,14 @@ pub struct ServerHello {
     pub server_time_unix_ms: u64,
     pub selected_mtu: u16,
     pub auth_method: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthConfirm {
+    pub client_instance_id: u64,
+    pub session_id: u64,
+    pub client_random: [u8; CLIENT_RANDOM_LEN],
+    pub server_random: [u8; SERVER_RANDOM_LEN],
 }
 
 pub fn encode_client_hello(hello: &ClientHello) -> Vec<u8> {
@@ -115,6 +125,46 @@ pub fn decode_server_hello(input: &[u8]) -> Result<ServerHello, VpnError> {
     })
 }
 
+pub fn encode_auth_confirm(auth: &AuthConfirm) -> Vec<u8> {
+    let mut buf = BytesMut::with_capacity(AUTH_CONFIRM_LEN);
+
+    buf.put_slice(&AUTH_CONFIRM_MAGIC);
+    buf.put_u64(auth.client_instance_id);
+    buf.put_u64(auth.session_id);
+    buf.put_slice(&auth.client_random);
+    buf.put_slice(&auth.server_random);
+
+    buf.to_vec()
+}
+
+pub fn decode_auth_confirm(input: &[u8]) -> Result<AuthConfirm, VpnError> {
+    if input.len() != AUTH_CONFIRM_LEN {
+        return Err(VpnError::InvalidHandshake("invalid AuthConfirm length"));
+    }
+
+    if input[..AUTH_CONFIRM_MAGIC.len()] != AUTH_CONFIRM_MAGIC {
+        return Err(VpnError::InvalidHandshake("invalid AuthConfirm magic"));
+    }
+
+    let mut rest = &input[AUTH_CONFIRM_MAGIC.len()..];
+    let client_instance_id = rest.get_u64();
+    let session_id = rest.get_u64();
+
+    let mut client_random = [0u8; CLIENT_RANDOM_LEN];
+    client_random.copy_from_slice(&rest[..CLIENT_RANDOM_LEN]);
+    rest.advance(CLIENT_RANDOM_LEN);
+
+    let mut server_random = [0u8; SERVER_RANDOM_LEN];
+    server_random.copy_from_slice(&rest[..SERVER_RANDOM_LEN]);
+
+    Ok(AuthConfirm {
+        client_instance_id,
+        session_id,
+        client_random,
+        server_random,
+    })
+}
+
 fn validate_auth_method(auth_method: u8) -> Result<(), VpnError> {
     if auth_method != AUTH_METHOD_PSK {
         return Err(VpnError::UnsupportedAuthMethod(auth_method));
@@ -151,6 +201,15 @@ mod tests {
             server_time_unix_ms: 1_714_000_000_456,
             selected_mtu: 1300,
             auth_method: AUTH_METHOD_PSK,
+        }
+    }
+
+    fn auth_confirm() -> AuthConfirm {
+        AuthConfirm {
+            client_instance_id: 0x0102_0304_0506_0708,
+            session_id: 0x1112_1314_1516_1718,
+            client_random: [0x11; CLIENT_RANDOM_LEN],
+            server_random: [0x22; SERVER_RANDOM_LEN],
         }
     }
 
@@ -207,6 +266,27 @@ mod tests {
             Err(VpnError::InvalidHandshake(
                 "ClientHello reserved byte must be zero"
             ))
+        ));
+    }
+
+    #[test]
+    fn auth_confirm_round_trips() {
+        let auth = auth_confirm();
+        let encoded = encode_auth_confirm(&auth);
+        let decoded = decode_auth_confirm(&encoded).expect("valid AuthConfirm");
+
+        assert_eq!(encoded.len(), AUTH_CONFIRM_LEN);
+        assert_eq!(decoded, auth);
+    }
+
+    #[test]
+    fn rejects_bad_auth_confirm_magic() {
+        let mut encoded = encode_auth_confirm(&auth_confirm());
+        encoded[0] = b'X';
+
+        assert!(matches!(
+            decode_auth_confirm(&encoded),
+            Err(VpnError::InvalidHandshake("invalid AuthConfirm magic"))
         ));
     }
 }

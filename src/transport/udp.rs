@@ -21,4 +21,8 @@ impl UdpTransport {
     pub async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
         Ok(self.socket.recv_from(buf).await?)
     }
+
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        Ok(self.socket.local_addr()?)
+    }
 }

@@ -22,4 +22,10 @@ pub enum VpnError {
 
     #[error("key derivation failed")]
     KeyDerivationFailed,
+
+    #[error("encryption failed")]
+    EncryptionFailed,
+
+    #[error("decryption failed")]
+    DecryptionFailed,
 }
