@@ -133,3 +133,10 @@ After this works, test routed VPN behavior:
 5. test `curl https://example.com`.
 
 Detailed commands are in [linux-routing.md](linux-routing.md).
+
+The binary can also print the routing commands:
+
+```bash
+./target/release/rust_network routes server --out-iface OUT_IFACE
+./target/release/rust_network routes client --server-ip SERVER_PUBLIC_IP --old-gateway OLD_GATEWAY
+```

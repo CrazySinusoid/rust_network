@@ -68,6 +68,15 @@ sudo iptables -A FORWARD -i tun0 -o OUT_IFACE -j ACCEPT
 sudo iptables -A FORWARD -i OUT_IFACE -o tun0 -m state --state RELATED,ESTABLISHED -j ACCEPT
 ```
 
+The binary can print the same commands:
+
+```bash
+./target/release/rust_network routes server \
+  --vpn-subnet 10.8.0.0/24 \
+  --tun-name tun0 \
+  --out-iface OUT_IFACE
+```
+
 Example with `eth0`:
 
 ```bash
@@ -85,6 +94,15 @@ Run on the client:
 sudo ip route add SERVER_PUBLIC_IP/32 via OLD_GATEWAY
 sudo ip route add 0.0.0.0/1 dev tun0
 sudo ip route add 128.0.0.0/1 dev tun0
+```
+
+The binary can print the same commands:
+
+```bash
+./target/release/rust_network routes client \
+  --server-ip SERVER_PUBLIC_IP \
+  --old-gateway OLD_GATEWAY \
+  --tun-name tun0
 ```
 
 The `SERVER_PUBLIC_IP/32` exception is important. Without it, the UDP connection
@@ -122,6 +140,16 @@ sudo iptables -D FORWARD -i OUT_IFACE -o tun0 -m state --state RELATED,ESTABLISH
 sudo sysctl -w net.ipv4.ip_forward=0
 ```
 
+The binary can print the same rollback commands:
+
+```bash
+./target/release/rust_network routes server \
+  --vpn-subnet 10.8.0.0/24 \
+  --tun-name tun0 \
+  --out-iface OUT_IFACE \
+  --rollback
+```
+
 Only disable `net.ipv4.ip_forward` if it was disabled before this test.
 
 ## Client Rollback
@@ -134,9 +162,19 @@ sudo ip route del 0.0.0.0/1 dev tun0
 sudo ip route del SERVER_PUBLIC_IP/32
 ```
 
+The binary can print the same rollback commands:
+
+```bash
+./target/release/rust_network routes client \
+  --server-ip SERVER_PUBLIC_IP \
+  --tun-name tun0 \
+  --rollback
+```
+
 ## Notes
 
 - These commands are intentionally manual for the MVP.
-- Later, the CLI can gain a `routes --print` or `--setup-routes` mode.
+- The `routes` CLI only prints commands. It does not apply system changes.
+- Later, the CLI can gain an explicit `--apply` mode.
 - DNS is not handled yet. If `ping 8.8.8.8` works but domain names do not, DNS
   routing/configuration is the next thing to check.
