@@ -15,11 +15,30 @@ use crate::protocol::{
     AUTH_METHOD_PSK,
 };
 use crate::transport::udp::UdpTransport;
+use crate::tun::linux;
+use crate::tunnel::{self, TunnelSession};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_UDP_FRAME_LEN: usize = 2048;
 
 pub async fn run(config: ClientConfig) -> Result<()> {
+    let tun_config = config.tun.clone();
+    let (transport, session) = establish_session(config).await?;
+
+    tracing::info!(
+        tun = %tun_config.name,
+        ip = %tun_config.ip_cidr,
+        mtu = session.selected_mtu,
+        "creating client TUN device"
+    );
+    let tun = linux::create(&tun_config.name, &tun_config.ip_cidr, session.selected_mtu).await?;
+
+    tunnel::run(tun, transport, session).await
+}
+
+pub(crate) async fn establish_session(
+    config: ClientConfig,
+) -> Result<(UdpTransport, TunnelSession)> {
     let psk = load_psk(&config.psk_file)?;
     let bind_addr = client_bind_addr(config.server);
     let transport = UdpTransport::bind(bind_addr).await?;
@@ -86,7 +105,14 @@ pub async fn run(config: ClientConfig) -> Result<()> {
         "handshake completed"
     );
 
-    Ok(())
+    let session = TunnelSession::client(
+        server_frame.header.session_id,
+        config.server,
+        keys,
+        server_hello.selected_mtu,
+    );
+
+    Ok((transport, session))
 }
 
 fn client_bind_addr(server: SocketAddr) -> SocketAddr {

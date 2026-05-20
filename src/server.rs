@@ -14,21 +14,34 @@ use crate::protocol::{
     encode_server_hello, Frame, FrameHeader, PacketType, ServerHello, AUTH_METHOD_PSK,
 };
 use crate::transport::udp::UdpTransport;
+use crate::tun::linux;
+use crate::tunnel::{self, TunnelSession};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_UDP_FRAME_LEN: usize = 2048;
 
 pub async fn run(config: ServerConfig) -> Result<()> {
+    let tun_config = config.tun.clone();
     let transport = UdpTransport::bind(config.listen).await?;
 
     tracing::info!(listen = %transport.local_addr()?, "server is listening");
-    run_with_transport(config, transport).await
+    let (transport, session) = establish_session_with_transport(config, transport).await?;
+
+    tracing::info!(
+        tun = %tun_config.name,
+        ip = %tun_config.ip_cidr,
+        mtu = session.selected_mtu,
+        "creating server TUN device"
+    );
+    let tun = linux::create(&tun_config.name, &tun_config.ip_cidr, session.selected_mtu).await?;
+
+    tunnel::run(tun, transport, session).await
 }
 
-pub(crate) async fn run_with_transport(
+pub(crate) async fn establish_session_with_transport(
     config: ServerConfig,
     transport: UdpTransport,
-) -> Result<()> {
+) -> Result<(UdpTransport, TunnelSession)> {
     let psk = load_psk(&config.psk_file)?;
 
     let mut buf = [0u8; MAX_UDP_FRAME_LEN];
@@ -103,7 +116,9 @@ pub(crate) async fn run_with_transport(
 
     tracing::info!(%peer, session_id, selected_mtu, "client authenticated");
 
-    Ok(())
+    let session = TunnelSession::server(session_id, peer, keys, selected_mtu);
+
+    Ok((transport, session))
 }
 
 fn new_session_id() -> u64 {
@@ -172,14 +187,19 @@ mod tests {
             server_tun_ip: "10.8.0.1".to_owned(),
         };
 
-        let server_task =
-            tokio::spawn(async move { run_with_transport(server_config, server_transport).await });
-        let client_result = crate::client::run(client_config).await;
+        let server_task = tokio::spawn(async move {
+            establish_session_with_transport(server_config, server_transport).await
+        });
+        let client_result = crate::client::establish_session(client_config).await;
         let server_result = server_task.await.unwrap();
 
         let _ = fs::remove_file(psk_path);
 
-        client_result.unwrap();
-        server_result.unwrap();
+        let (_client_transport, client_session) = client_result.unwrap();
+        let (_server_transport, server_session) = server_result.unwrap();
+
+        assert_eq!(client_session.session_id, server_session.session_id);
+        assert_eq!(client_session.peer_addr, server_addr);
+        assert_eq!(server_session.selected_mtu, 1300);
     }
 }

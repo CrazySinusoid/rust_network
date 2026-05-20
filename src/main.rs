@@ -11,6 +11,7 @@ mod routing;
 mod server;
 mod transport;
 mod tun;
+mod tunnel;
 mod util;
 
 use anyhow::Result;
