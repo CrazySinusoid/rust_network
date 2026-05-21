@@ -8,6 +8,9 @@ client tun0 10.8.0.2/24 <-> server tun0 10.8.0.1/24
 
 It does not test internet routing/NAT yet.
 
+Use [linux-test-checklist.md](linux-test-checklist.md) when running this on real
+Linux hosts so the logs and diagnostics are collected consistently.
+
 ## Requirements
 
 - two Linux hosts, VMs, or network namespaces;

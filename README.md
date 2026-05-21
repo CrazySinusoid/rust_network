@@ -6,7 +6,9 @@ ChaCha20-Poly1305 encryption, and TUN-based IPv4 tunneling.
 Current state: protocol core, PSK UDP handshake, Linux TUN setup, encrypted
 TUN-to-UDP data path, keepalive, and timeout-driven reconnect skeleton.
 
-Start with the Linux smoke test in [docs/demo.md](docs/demo.md).
+Start with the Linux smoke test in [docs/demo.md](docs/demo.md). Use
+[docs/linux-test-checklist.md](docs/linux-test-checklist.md) to collect logs and
+diagnostics during runtime testing.
 
 For routed VPN / internet gateway setup, the binary can print manual routing
 commands without applying them:
