@@ -14,5 +14,6 @@ pub use handshake::{
 };
 pub use packet_type::{DisconnectReason, ErrorCode, PacketType};
 pub use secure::{
-    decrypt_auth_confirm_frame, decrypt_data_frame, encrypt_auth_confirm_frame, encrypt_data_frame,
+    decrypt_auth_confirm_frame, decrypt_data_frame, decrypt_keepalive_frame,
+    encrypt_auth_confirm_frame, encrypt_data_frame, encrypt_keepalive_frame,
 };

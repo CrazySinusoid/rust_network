@@ -8,6 +8,7 @@ use tokio::time::timeout;
 use crate::config::ServerConfig;
 use crate::crypto::keys::derive_session_keys;
 use crate::crypto::psk::load_psk;
+use crate::error::VpnError;
 use crate::protocol::handshake::MIN_MTU;
 use crate::protocol::{
     decode_client_hello, decode_frame, decrypt_auth_confirm_frame, encode_frame,
@@ -23,25 +24,44 @@ const MAX_UDP_FRAME_LEN: usize = 2048;
 pub async fn run(config: ServerConfig) -> Result<()> {
     let tun_config = config.tun.clone();
     let transport = UdpTransport::bind(config.listen).await?;
+    let mut tun = None;
 
     tracing::info!(listen = %transport.local_addr()?, "server is listening");
-    let (transport, session) = establish_session_with_transport(config, transport).await?;
 
-    tracing::info!(
-        tun = %tun_config.name,
-        ip = %tun_config.ip_cidr,
-        mtu = session.selected_mtu,
-        "creating server TUN device"
-    );
-    let tun = linux::create(&tun_config.name, &tun_config.ip_cidr, session.selected_mtu).await?;
+    loop {
+        let session = establish_session_with_transport(&config, &transport).await?;
 
-    tunnel::run(tun, transport, session).await
+        if tun.is_none() {
+            tracing::info!(
+                tun = %tun_config.name,
+                ip = %tun_config.ip_cidr,
+                mtu = session.selected_mtu,
+                "creating server TUN device"
+            );
+            tun = Some(
+                linux::create(&tun_config.name, &tun_config.ip_cidr, session.selected_mtu).await?,
+            );
+        }
+
+        let result = tunnel::run(
+            tun.as_mut().expect("TUN is initialized"),
+            &transport,
+            session,
+        )
+        .await;
+        if is_session_timeout(&result) {
+            tracing::warn!("server session timed out; waiting for a new ClientHello");
+            continue;
+        }
+
+        return result;
+    }
 }
 
 pub(crate) async fn establish_session_with_transport(
-    config: ServerConfig,
-    transport: UdpTransport,
-) -> Result<(UdpTransport, TunnelSession)> {
+    config: &ServerConfig,
+    transport: &UdpTransport,
+) -> Result<TunnelSession> {
     let psk = load_psk(&config.psk_file)?;
 
     let mut buf = [0u8; MAX_UDP_FRAME_LEN];
@@ -118,7 +138,7 @@ pub(crate) async fn establish_session_with_transport(
 
     let session = TunnelSession::server(session_id, peer, keys, selected_mtu);
 
-    Ok((transport, session))
+    Ok(session)
 }
 
 fn new_session_id() -> u64 {
@@ -128,6 +148,14 @@ fn new_session_id() -> u64 {
             return session_id;
         }
     }
+}
+
+fn is_session_timeout(result: &Result<()>) -> bool {
+    result
+        .as_ref()
+        .err()
+        .and_then(|err| err.downcast_ref::<VpnError>())
+        .is_some_and(|err| matches!(err, VpnError::SessionTimeout { .. }))
 }
 
 async fn recv_frame(
@@ -188,15 +216,15 @@ mod tests {
         };
 
         let server_task = tokio::spawn(async move {
-            establish_session_with_transport(server_config, server_transport).await
+            establish_session_with_transport(&server_config, &server_transport).await
         });
-        let client_result = crate::client::establish_session(client_config).await;
+        let client_result = crate::client::establish_session(&client_config).await;
         let server_result = server_task.await.unwrap();
 
         let _ = fs::remove_file(psk_path);
 
         let (_client_transport, client_session) = client_result.unwrap();
-        let (_server_transport, server_session) = server_result.unwrap();
+        let server_session = server_result.unwrap();
 
         assert_eq!(client_session.session_id, server_session.session_id);
         assert_eq!(client_session.peer_addr, server_addr);

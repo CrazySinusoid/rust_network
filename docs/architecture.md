@@ -10,3 +10,13 @@ Core modules:
 - `tun`: Linux TUN device management.
 - `routing`: Linux routing and NAT command helpers.
 - `packet`: IPv4 inspection helpers.
+
+Session lifecycle:
+
+1. client and server complete the PSK handshake;
+2. both sides enter the encrypted TUN-to-UDP tunnel loop;
+3. keepalive frames are sent every 10 seconds;
+4. if no valid encrypted peer traffic arrives for 30 seconds, the session times
+   out;
+5. the client starts a new handshake after a short delay;
+6. the server waits for the next `ClientHello`.

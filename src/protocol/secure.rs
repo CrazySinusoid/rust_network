@@ -7,6 +7,8 @@ use crate::protocol::frame::FLAG_ENCRYPTED_PAYLOAD;
 use crate::protocol::handshake::{decode_auth_confirm, encode_auth_confirm, AuthConfirm};
 use crate::protocol::{Frame, FrameHeader, PacketType};
 
+pub const KEEPALIVE_LEN: usize = 8;
+
 pub fn encrypt_auth_confirm_frame(
     auth: &AuthConfirm,
     key: &AeadKeyBytes,
@@ -73,6 +75,55 @@ pub fn decrypt_data_frame(
     )
 }
 
+pub fn encrypt_keepalive_frame(
+    session_id: u64,
+    sequence_number: u64,
+    key: &AeadKeyBytes,
+    nonce_prefix: NoncePrefix,
+    unix_time_ms: u64,
+) -> Result<Frame, VpnError> {
+    let header = FrameHeader::encrypted(PacketType::Keepalive, session_id, sequence_number);
+    let aad = encode_header(&header);
+    let plaintext = encode_keepalive(unix_time_ms);
+    let payload =
+        encrypt_payload_with_sequence(key, nonce_prefix, sequence_number, &aad, &plaintext)?;
+
+    Ok(Frame { header, payload })
+}
+
+pub fn decrypt_keepalive_frame(
+    frame: &Frame,
+    key: &AeadKeyBytes,
+    nonce_prefix: NoncePrefix,
+) -> Result<u64, VpnError> {
+    validate_encrypted_packet(frame, PacketType::Keepalive)?;
+
+    let aad = encode_header(&frame.header);
+    let plaintext = decrypt_payload_with_sequence(
+        key,
+        nonce_prefix,
+        frame.header.sequence_number,
+        &aad,
+        &frame.payload,
+    )?;
+
+    decode_keepalive(&plaintext)
+}
+
+fn encode_keepalive(unix_time_ms: u64) -> Vec<u8> {
+    unix_time_ms.to_be_bytes().to_vec()
+}
+
+fn decode_keepalive(input: &[u8]) -> Result<u64, VpnError> {
+    if input.len() != KEEPALIVE_LEN {
+        return Err(VpnError::InvalidFrame("invalid keepalive length"));
+    }
+
+    let mut bytes = [0u8; KEEPALIVE_LEN];
+    bytes.copy_from_slice(input);
+    Ok(u64::from_be_bytes(bytes))
+}
+
 fn validate_encrypted_packet(frame: &Frame, expected_type: PacketType) -> Result<(), VpnError> {
     if frame.header.packet_type != expected_type {
         return Err(VpnError::InvalidFrame("unexpected encrypted packet type"));
@@ -135,6 +186,18 @@ mod tests {
     }
 
     #[test]
+    fn keepalive_frame_round_trips() {
+        let frame =
+            encrypt_keepalive_frame(42, 9, &key(), nonce_prefix(), 1_714_000_000_123).unwrap();
+        let unix_time_ms = decrypt_keepalive_frame(&frame, &key(), nonce_prefix()).unwrap();
+
+        assert_eq!(unix_time_ms, 1_714_000_000_123);
+        assert_eq!(frame.header.packet_type, PacketType::Keepalive);
+        assert_eq!(frame.header.session_id, 42);
+        assert_eq!(frame.header.sequence_number, 9);
+    }
+
+    #[test]
     fn changed_header_breaks_aad() {
         let ip_packet = b"fake ipv4 packet bytes";
         let mut frame = encrypt_data_frame(42, 7, &key(), nonce_prefix(), ip_packet).unwrap();
@@ -168,6 +231,20 @@ mod tests {
         assert!(matches!(
             decrypt_data_frame(&frame, &key(), nonce_prefix()),
             Err(VpnError::InvalidFrame("encrypted packet sequence is zero"))
+        ));
+    }
+
+    #[test]
+    fn rejects_bad_keepalive_plaintext_length() {
+        let header = FrameHeader::encrypted(PacketType::Keepalive, 42, 9);
+        let aad = encode_header(&header);
+        let payload =
+            encrypt_payload_with_sequence(&key(), nonce_prefix(), 9, &aad, b"bad").unwrap();
+        let frame = Frame { header, payload };
+
+        assert!(matches!(
+            decrypt_keepalive_frame(&frame, &key(), nonce_prefix()),
+            Err(VpnError::InvalidFrame("invalid keepalive length"))
         ));
     }
 }

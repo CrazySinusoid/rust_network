@@ -4,11 +4,12 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use rand::rngs::OsRng;
 use rand::RngCore;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 use crate::config::ClientConfig;
 use crate::crypto::keys::derive_session_keys;
 use crate::crypto::psk::load_psk;
+use crate::error::VpnError;
 use crate::protocol::{
     decode_frame, decode_server_hello, encode_client_hello, encode_frame,
     encrypt_auth_confirm_frame, AuthConfirm, ClientHello, Frame, FrameHeader, PacketType,
@@ -19,25 +20,49 @@ use crate::tun::linux;
 use crate::tunnel::{self, TunnelSession};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const RECONNECT_DELAY: Duration = Duration::from_secs(3);
 const MAX_UDP_FRAME_LEN: usize = 2048;
 
 pub async fn run(config: ClientConfig) -> Result<()> {
     let tun_config = config.tun.clone();
-    let (transport, session) = establish_session(config).await?;
+    let mut tun = None;
 
-    tracing::info!(
-        tun = %tun_config.name,
-        ip = %tun_config.ip_cidr,
-        mtu = session.selected_mtu,
-        "creating client TUN device"
-    );
-    let tun = linux::create(&tun_config.name, &tun_config.ip_cidr, session.selected_mtu).await?;
+    loop {
+        let (transport, session) = establish_session(&config).await?;
 
-    tunnel::run(tun, transport, session).await
+        if tun.is_none() {
+            tracing::info!(
+                tun = %tun_config.name,
+                ip = %tun_config.ip_cidr,
+                mtu = session.selected_mtu,
+                "creating client TUN device"
+            );
+            tun = Some(
+                linux::create(&tun_config.name, &tun_config.ip_cidr, session.selected_mtu).await?,
+            );
+        }
+
+        let result = tunnel::run(
+            tun.as_mut().expect("TUN is initialized"),
+            &transport,
+            session,
+        )
+        .await;
+        if is_session_timeout(&result) {
+            tracing::warn!(
+                delay_secs = RECONNECT_DELAY.as_secs(),
+                "client session timed out; reconnecting"
+            );
+            sleep(RECONNECT_DELAY).await;
+            continue;
+        }
+
+        return result;
+    }
 }
 
 pub(crate) async fn establish_session(
-    config: ClientConfig,
+    config: &ClientConfig,
 ) -> Result<(UdpTransport, TunnelSession)> {
     let psk = load_psk(&config.psk_file)?;
     let bind_addr = client_bind_addr(config.server);
@@ -113,6 +138,14 @@ pub(crate) async fn establish_session(
     );
 
     Ok((transport, session))
+}
+
+fn is_session_timeout(result: &Result<()>) -> bool {
+    result
+        .as_ref()
+        .err()
+        .and_then(|err| err.downcast_ref::<VpnError>())
+        .is_some_and(|err| matches!(err, VpnError::SessionTimeout { .. }))
 }
 
 fn client_bind_addr(server: SocketAddr) -> SocketAddr {

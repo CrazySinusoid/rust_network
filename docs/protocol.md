@@ -24,3 +24,28 @@ Packet types:
 - `5` Keepalive
 - `6` Disconnect
 - `7` Error
+
+Encrypted packet types:
+
+- `AuthConfirm`
+- `Data`
+- `Keepalive`
+
+For encrypted packets, the frame header is plaintext but authenticated as AEAD
+associated data. The encrypted payload includes the ChaCha20-Poly1305 tag.
+
+`Data` payload is a raw IPv4 packet from TUN.
+
+`Keepalive` payload is an encrypted 8-byte big-endian Unix timestamp in
+milliseconds. Peers send keepalives every 10 seconds when the tunnel loop is
+running. If no valid encrypted peer traffic is received for 30 seconds, the
+current session is treated as stale and the tunnel exits with a `SessionTimeout`
+error.
+
+Reconnect behavior is deliberately simple in this version:
+
+- the client waits 3 seconds after a session timeout, then starts a new
+  handshake;
+- the server returns to waiting for a new `ClientHello` after a session timeout;
+- a reconnect creates a new `session_id`, new randoms, and new session keys;
+- the TUN device is kept open and reused across reconnect attempts.

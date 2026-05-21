@@ -28,4 +28,9 @@ pub enum VpnError {
 
     #[error("decryption failed")]
     DecryptionFailed,
+
+    #[error(
+        "session {session_id} timed out after {timeout_secs} seconds without valid peer traffic"
+    )]
+    SessionTimeout { session_id: u64, timeout_secs: u64 },
 }
