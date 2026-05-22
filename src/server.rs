@@ -26,7 +26,17 @@ pub async fn run(config: ServerConfig) -> Result<()> {
     let transport = UdpTransport::bind(config.listen).await?;
     let mut tun = None;
 
-    tracing::info!(listen = %transport.local_addr()?, "server is listening");
+    tracing::info!(
+        mode = "server",
+        listen = %transport.local_addr()?,
+        psk_file = %config.psk_file.display(),
+        tun_name = %config.tun.name,
+        tun_ip = %config.tun.ip_cidr,
+        peer_ip = %config.peer_ip,
+        mtu = config.tun.mtu,
+        out_iface = %config.out_iface,
+        "server is listening"
+    );
 
     loop {
         let session = establish_session_with_transport(&config, &transport).await?;

@@ -55,6 +55,19 @@ sudo RUST_LOG=debug ./target/release/rust_network server \
   --mtu 1300
 ```
 
+For crate-specific debug logs, use:
+
+```bash
+sudo RUST_LOG=rust_network=debug ./target/release/rust_network server ...
+```
+
+For a quick CLI-controlled debug level without `RUST_LOG`, use `-v` or `-vv`
+before the subcommand:
+
+```bash
+sudo ./target/release/rust_network -v server ...
+```
+
 Expected checks:
 
 ```bash
@@ -77,6 +90,8 @@ sudo RUST_LOG=debug ./target/release/rust_network client \
   --server-tun-ip 10.8.0.1 \
   --mtu 1300
 ```
+
+The client also supports `-v` and `-vv` before the `client` subcommand.
 
 Expected checks:
 

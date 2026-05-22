@@ -10,6 +10,16 @@ Start with the Linux smoke test in [docs/demo.md](docs/demo.md). Use
 [docs/linux-test-checklist.md](docs/linux-test-checklist.md) to collect logs and
 diagnostics during runtime testing.
 
+Useful runtime flags:
+
+```bash
+./target/release/rust_network --version
+./target/release/rust_network -v routes server --out-iface eth0
+./target/release/rust_network -vv routes server --out-iface eth0
+```
+
+`RUST_LOG` takes precedence over `-v/-vv` when it is set.
+
 For routed VPN / internet gateway setup, the binary can print manual routing
 commands without applying them:
 

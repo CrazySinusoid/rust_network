@@ -13,6 +13,7 @@ ip -V
 iptables --version
 ls -l /dev/net/tun
 cargo build --release
+./target/release/rust_network --version
 ```
 
 If `/dev/net/tun` is missing:
@@ -33,6 +34,18 @@ chmod 600 psk.txt
 
 ```bash
 sudo RUST_LOG=rust_network=debug ./target/release/rust_network server \
+  --listen 0.0.0.0:7000 \
+  --psk-file ./psk.txt \
+  --tun-name tun0 \
+  --tun-ip 10.8.0.1/24 \
+  --peer-ip 10.8.0.2 \
+  --mtu 1300
+```
+
+Equivalent CLI-controlled debug logging:
+
+```bash
+sudo ./target/release/rust_network -v server \
   --listen 0.0.0.0:7000 \
   --psk-file ./psk.txt \
   --tun-name tun0 \
@@ -66,6 +79,18 @@ Replace `SERVER_PUBLIC_IP` with the server IP reachable from the client.
 
 ```bash
 sudo RUST_LOG=rust_network=debug ./target/release/rust_network client \
+  --server SERVER_PUBLIC_IP:7000 \
+  --psk-file ./psk.txt \
+  --tun-name tun0 \
+  --tun-ip 10.8.0.2/24 \
+  --server-tun-ip 10.8.0.1 \
+  --mtu 1300
+```
+
+Equivalent CLI-controlled debug logging:
+
+```bash
+sudo ./target/release/rust_network -v client \
   --server SERVER_PUBLIC_IP:7000 \
   --psk-file ./psk.txt \
   --tun-name tun0 \

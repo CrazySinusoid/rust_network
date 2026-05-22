@@ -27,6 +27,18 @@ pub async fn run(config: ClientConfig) -> Result<()> {
     let tun_config = config.tun.clone();
     let mut tun = None;
 
+    tracing::info!(
+        mode = "client",
+        server = %config.server,
+        psk_file = %config.psk_file.display(),
+        tun_name = %config.tun.name,
+        tun_ip = %config.tun.ip_cidr,
+        server_tun_ip = %config.server_tun_ip,
+        mtu = config.tun.mtu,
+        reconnect_delay_secs = RECONNECT_DELAY.as_secs(),
+        "starting client"
+    );
+
     loop {
         let (transport, session) = establish_session(&config).await?;
 

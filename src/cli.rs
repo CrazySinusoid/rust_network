@@ -1,14 +1,18 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 
 use crate::routing::linux::{DEFAULT_TUN_NAME, DEFAULT_VPN_SUBNET};
 
 #[derive(Debug, Parser)]
 #[command(name = "rust_network")]
 #[command(about = "Educational PSK-authenticated VPN over UDP")]
+#[command(version)]
 pub struct Cli {
+    #[arg(short, long, action = ArgAction::Count, global = true)]
+    pub verbose: u8,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -115,6 +119,8 @@ mod tests {
     fn parses_server_routes_command() {
         let cli = Cli::parse_from(["rust_network", "routes", "server", "--out-iface", "eth0"]);
 
+        assert_eq!(cli.verbose, 0);
+
         match cli.command {
             Command::Routes(RoutesArgs {
                 command: RoutesCommand::Server(args),
@@ -150,5 +156,19 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_global_verbose_count() {
+        let cli = Cli::parse_from([
+            "rust_network",
+            "-vv",
+            "routes",
+            "server",
+            "--out-iface",
+            "eth0",
+        ]);
+
+        assert_eq!(cli.verbose, 2);
     }
 }
