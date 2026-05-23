@@ -30,3 +30,6 @@ commands without applying them:
 
 See [docs/linux-routing.md](docs/linux-routing.md) for apply and rollback
 commands.
+
+Security limitations and PSK-only tradeoffs are documented in
+[docs/security.md](docs/security.md).

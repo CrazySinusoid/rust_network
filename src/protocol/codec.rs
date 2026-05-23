@@ -1,7 +1,9 @@
 use bytes::{Buf, BufMut, BytesMut};
 
 use crate::error::VpnError;
-use crate::protocol::{Frame, FrameHeader, PacketType, HEADER_LEN, MAGIC, VERSION};
+use crate::protocol::{
+    Frame, FrameHeader, PacketType, HEADER_LEN, MAGIC, MAX_FRAME_LEN, MAX_PAYLOAD_LEN, VERSION,
+};
 
 pub fn encode_frame(frame: &Frame) -> Vec<u8> {
     let mut buf = BytesMut::with_capacity(HEADER_LEN + frame.payload.len());
@@ -31,6 +33,13 @@ pub fn decode_frame(input: &[u8]) -> Result<Frame, VpnError> {
         return Err(VpnError::InvalidFrame("frame shorter than header"));
     }
 
+    if input.len() > MAX_FRAME_LEN {
+        return Err(VpnError::FrameTooLarge {
+            len: input.len(),
+            max: MAX_FRAME_LEN,
+        });
+    }
+
     if input[0..4] != MAGIC {
         return Err(VpnError::InvalidFrame("bad magic"));
     }
@@ -51,6 +60,13 @@ pub fn decode_frame(input: &[u8]) -> Result<Frame, VpnError> {
     let mut numeric = &input[8..HEADER_LEN];
     let session_id = numeric.get_u64();
     let sequence_number = numeric.get_u64();
+    let payload = &input[HEADER_LEN..];
+    if payload.len() > MAX_PAYLOAD_LEN {
+        return Err(VpnError::FrameTooLarge {
+            len: payload.len(),
+            max: MAX_PAYLOAD_LEN,
+        });
+    }
 
     Ok(Frame {
         header: FrameHeader {
@@ -59,7 +75,7 @@ pub fn decode_frame(input: &[u8]) -> Result<Frame, VpnError> {
             session_id,
             sequence_number,
         },
-        payload: input[HEADER_LEN..].to_vec(),
+        payload: payload.to_vec(),
     })
 }
 
@@ -123,6 +139,19 @@ mod tests {
         assert!(matches!(
             decode_frame(&encoded),
             Err(VpnError::UnknownPacketType(99))
+        ));
+    }
+
+    #[test]
+    fn rejects_oversized_frame() {
+        let oversized = vec![0u8; MAX_FRAME_LEN + 1];
+
+        assert!(matches!(
+            decode_frame(&oversized),
+            Err(VpnError::FrameTooLarge {
+                len,
+                max: MAX_FRAME_LEN
+            }) if len == MAX_FRAME_LEN + 1
         ));
     }
 }

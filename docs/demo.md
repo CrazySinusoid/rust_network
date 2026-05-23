@@ -115,6 +115,10 @@ Expected behavior:
 - both sides log `encrypted tunnel loop started`;
 - with `RUST_LOG=debug`, packet movement appears as encrypted data frames.
 
+Stop either side with Ctrl+C. During the tunnel loop the peer sends an encrypted
+`Disconnect` frame before exiting. If routed mode was enabled, print rollback
+commands with `rust_network routes ... --rollback`.
+
 ## Troubleshooting
 
 If `/dev/net/tun` cannot be opened, run as root and check that TUN is enabled:

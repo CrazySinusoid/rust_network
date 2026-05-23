@@ -42,6 +42,10 @@ running. If no valid encrypted peer traffic is received for 30 seconds, the
 current session is treated as stale and the tunnel exits with a `SessionTimeout`
 error.
 
+`Disconnect` payload is encrypted and contains a one-byte disconnect reason.
+`Error` frames contain a one-byte protocol error code and are handled as control
+frames.
+
 Reconnect behavior is deliberately simple in this version:
 
 - the client waits 3 seconds after a session timeout, then starts a new
@@ -49,3 +53,6 @@ Reconnect behavior is deliberately simple in this version:
 - the server returns to waiting for a new `ClientHello` after a session timeout;
 - a reconnect creates a new `session_id`, new randoms, and new session keys;
 - the TUN device is kept open and reused across reconnect attempts.
+
+Replay protection uses a 64-packet sliding window. This allows limited UDP
+reordering while still rejecting duplicate and stale encrypted packets.

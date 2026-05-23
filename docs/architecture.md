@@ -20,3 +20,12 @@ Session lifecycle:
    out;
 5. the client starts a new handshake after a short delay;
 6. the server waits for the next `ClientHello`.
+
+Ctrl+C during the tunnel loop sends an encrypted `Disconnect` frame with
+`NormalShutdown` before exiting. If routed mode was enabled, print rollback
+commands with:
+
+```bash
+rust_network routes client --server-ip SERVER_PUBLIC_IP --rollback
+rust_network routes server --out-iface OUT_IFACE --rollback
+```

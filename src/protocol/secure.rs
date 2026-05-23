@@ -5,9 +5,11 @@ use crate::error::VpnError;
 use crate::protocol::codec::encode_header;
 use crate::protocol::frame::FLAG_ENCRYPTED_PAYLOAD;
 use crate::protocol::handshake::{decode_auth_confirm, encode_auth_confirm, AuthConfirm};
-use crate::protocol::{Frame, FrameHeader, PacketType};
+use crate::protocol::{DisconnectReason, ErrorCode, Frame, FrameHeader, PacketType};
 
 pub const KEEPALIVE_LEN: usize = 8;
+pub const DISCONNECT_LEN: usize = 1;
+pub const ERROR_LEN: usize = 1;
 
 pub fn encrypt_auth_confirm_frame(
     auth: &AuthConfirm,
@@ -110,6 +112,57 @@ pub fn decrypt_keepalive_frame(
     decode_keepalive(&plaintext)
 }
 
+pub fn encrypt_disconnect_frame(
+    session_id: u64,
+    sequence_number: u64,
+    key: &AeadKeyBytes,
+    nonce_prefix: NoncePrefix,
+    reason: DisconnectReason,
+) -> Result<Frame, VpnError> {
+    let header = FrameHeader::encrypted(PacketType::Disconnect, session_id, sequence_number);
+    let aad = encode_header(&header);
+    let plaintext = vec![u8::from(reason)];
+    let payload =
+        encrypt_payload_with_sequence(key, nonce_prefix, sequence_number, &aad, &plaintext)?;
+
+    Ok(Frame { header, payload })
+}
+
+pub fn decrypt_disconnect_frame(
+    frame: &Frame,
+    key: &AeadKeyBytes,
+    nonce_prefix: NoncePrefix,
+) -> Result<DisconnectReason, VpnError> {
+    validate_encrypted_packet(frame, PacketType::Disconnect)?;
+
+    let aad = encode_header(&frame.header);
+    let plaintext = decrypt_payload_with_sequence(
+        key,
+        nonce_prefix,
+        frame.header.sequence_number,
+        &aad,
+        &frame.payload,
+    )?;
+
+    if plaintext.len() != DISCONNECT_LEN {
+        return Err(VpnError::InvalidFrame("invalid disconnect length"));
+    }
+
+    DisconnectReason::try_from(plaintext[0])
+}
+
+pub fn decode_error_frame(frame: &Frame) -> Result<ErrorCode, VpnError> {
+    if frame.header.packet_type != PacketType::Error {
+        return Err(VpnError::InvalidFrame("unexpected error packet type"));
+    }
+
+    if frame.payload.len() != ERROR_LEN {
+        return Err(VpnError::InvalidFrame("invalid error length"));
+    }
+
+    ErrorCode::try_from(frame.payload[0])
+}
+
 fn encode_keepalive(unix_time_ms: u64) -> Vec<u8> {
     unix_time_ms.to_be_bytes().to_vec()
 }
@@ -198,6 +251,35 @@ mod tests {
     }
 
     #[test]
+    fn disconnect_frame_round_trips() {
+        let frame = encrypt_disconnect_frame(
+            42,
+            10,
+            &key(),
+            nonce_prefix(),
+            DisconnectReason::NormalShutdown,
+        )
+        .unwrap();
+        let reason = decrypt_disconnect_frame(&frame, &key(), nonce_prefix()).unwrap();
+
+        assert_eq!(reason, DisconnectReason::NormalShutdown);
+        assert_eq!(frame.header.packet_type, PacketType::Disconnect);
+    }
+
+    #[test]
+    fn error_frame_decodes() {
+        let frame = Frame {
+            header: FrameHeader::new(PacketType::Error, 0, 42, 0),
+            payload: vec![u8::from(ErrorCode::UnknownSession)],
+        };
+
+        assert_eq!(
+            decode_error_frame(&frame).unwrap(),
+            ErrorCode::UnknownSession
+        );
+    }
+
+    #[test]
     fn changed_header_breaks_aad() {
         let ip_packet = b"fake ipv4 packet bytes";
         let mut frame = encrypt_data_frame(42, 7, &key(), nonce_prefix(), ip_packet).unwrap();
@@ -245,6 +327,20 @@ mod tests {
         assert!(matches!(
             decrypt_keepalive_frame(&frame, &key(), nonce_prefix()),
             Err(VpnError::InvalidFrame("invalid keepalive length"))
+        ));
+    }
+
+    #[test]
+    fn rejects_bad_disconnect_plaintext_length() {
+        let header = FrameHeader::encrypted(PacketType::Disconnect, 42, 9);
+        let aad = encode_header(&header);
+        let payload =
+            encrypt_payload_with_sequence(&key(), nonce_prefix(), 9, &aad, b"bad").unwrap();
+        let frame = Frame { header, payload };
+
+        assert!(matches!(
+            decrypt_disconnect_frame(&frame, &key(), nonce_prefix()),
+            Err(VpnError::InvalidFrame("invalid disconnect length"))
         ));
     }
 }

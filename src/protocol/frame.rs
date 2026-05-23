@@ -3,6 +3,8 @@ use crate::protocol::PacketType;
 pub const MAGIC: [u8; 4] = *b"RVPN";
 pub const VERSION: u8 = 1;
 pub const HEADER_LEN: usize = 24;
+pub const MAX_FRAME_LEN: usize = 2048;
+pub const MAX_PAYLOAD_LEN: usize = MAX_FRAME_LEN - HEADER_LEN;
 pub const FLAG_ENCRYPTED_PAYLOAD: u8 = 0b0000_0001;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

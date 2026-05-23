@@ -187,6 +187,9 @@ Expected:
 
 ## 6. Rollback
 
+During the tunnel loop, Ctrl+C sends an encrypted `Disconnect` frame before the
+process exits. This does not undo routing/NAT changes.
+
 Print rollback commands:
 
 ```bash

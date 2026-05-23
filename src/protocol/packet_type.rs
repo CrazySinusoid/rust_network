@@ -44,6 +44,26 @@ pub enum DisconnectReason {
     Timeout = 4,
 }
 
+impl TryFrom<u8> for DisconnectReason {
+    type Error = VpnError;
+
+    fn try_from(value: u8) -> Result<Self, VpnError> {
+        match value {
+            1 => Ok(Self::NormalShutdown),
+            2 => Ok(Self::AuthFailed),
+            3 => Ok(Self::ProtocolError),
+            4 => Ok(Self::Timeout),
+            _ => Err(VpnError::InvalidFrame("unknown disconnect reason")),
+        }
+    }
+}
+
+impl From<DisconnectReason> for u8 {
+    fn from(value: DisconnectReason) -> Self {
+        value as u8
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ErrorCode {
@@ -52,4 +72,25 @@ pub enum ErrorCode {
     AuthFailed = 3,
     UnknownSession = 4,
     DecryptFailed = 5,
+}
+
+impl TryFrom<u8> for ErrorCode {
+    type Error = VpnError;
+
+    fn try_from(value: u8) -> Result<Self, VpnError> {
+        match value {
+            1 => Ok(Self::InvalidFrame),
+            2 => Ok(Self::UnsupportedVersion),
+            3 => Ok(Self::AuthFailed),
+            4 => Ok(Self::UnknownSession),
+            5 => Ok(Self::DecryptFailed),
+            _ => Err(VpnError::InvalidFrame("unknown error code")),
+        }
+    }
+}
+
+impl From<ErrorCode> for u8 {
+    fn from(value: ErrorCode) -> Self {
+        value as u8
+    }
 }

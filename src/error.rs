@@ -5,6 +5,12 @@ pub enum VpnError {
     #[error("invalid frame: {0}")]
     InvalidFrame(&'static str),
 
+    #[error("frame too large: {len} bytes, max {max} bytes")]
+    FrameTooLarge { len: usize, max: usize },
+
+    #[error("invalid IPv4 packet: {0}")]
+    InvalidIpv4Packet(&'static str),
+
     #[error("unsupported protocol version: {0}")]
     UnsupportedVersion(u8),
 
@@ -33,4 +39,10 @@ pub enum VpnError {
         "session {session_id} timed out after {timeout_secs} seconds without valid peer traffic"
     )]
     SessionTimeout { session_id: u64, timeout_secs: u64 },
+
+    #[error("peer disconnected: {0:?}")]
+    PeerDisconnected(crate::protocol::DisconnectReason),
+
+    #[error("peer returned protocol error: {0:?}")]
+    PeerError(crate::protocol::ErrorCode),
 }

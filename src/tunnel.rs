@@ -8,14 +8,16 @@ use crate::crypto::aead::AEAD_TAG_LEN;
 use crate::crypto::keys::{AeadKeyBytes, SessionKeys};
 use crate::crypto::nonce::NoncePrefix;
 use crate::error::VpnError;
+use crate::packet::ipv4;
 use crate::protocol::{
-    decode_frame, decrypt_data_frame, decrypt_keepalive_frame, encode_frame, encrypt_data_frame,
-    encrypt_keepalive_frame, PacketType, HEADER_LEN,
+    decode_error_frame, decode_frame, decrypt_data_frame, decrypt_disconnect_frame,
+    decrypt_keepalive_frame, encode_frame, encrypt_data_frame, encrypt_disconnect_frame,
+    encrypt_keepalive_frame, DisconnectReason, PacketType, ReplayDecision, ReplayWindow,
+    MAX_FRAME_LEN,
 };
 use crate::transport::udp::UdpTransport;
 use crate::tun::linux::TunDevice;
 
-const EXTRA_FRAME_SPACE: usize = 64;
 pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 pub const SESSION_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -23,7 +25,7 @@ pub struct TunnelSession {
     pub session_id: u64,
     pub peer_addr: SocketAddr,
     pub send_seq: u64,
-    pub recv_highest_seq: u64,
+    pub replay_window: ReplayWindow,
     pub send_key: AeadKeyBytes,
     pub recv_key: AeadKeyBytes,
     pub send_nonce_prefix: NoncePrefix,
@@ -43,7 +45,7 @@ impl TunnelSession {
             session_id,
             peer_addr,
             send_seq: 0,
-            recv_highest_seq: 0,
+            replay_window: ReplayWindow::new(),
             send_key: keys.client_to_server_key,
             recv_key: keys.server_to_client_key,
             send_nonce_prefix: keys.client_to_server_nonce_prefix,
@@ -63,7 +65,7 @@ impl TunnelSession {
             session_id,
             peer_addr,
             send_seq: 0,
-            recv_highest_seq: 0,
+            replay_window: ReplayWindow::new(),
             send_key: keys.server_to_client_key,
             recv_key: keys.client_to_server_key,
             send_nonce_prefix: keys.server_to_client_nonce_prefix,
@@ -78,12 +80,12 @@ impl TunnelSession {
         self.send_seq
     }
 
-    fn is_fresh_recv_sequence(&self, sequence_number: u64) -> bool {
-        sequence_number != 0 && sequence_number > self.recv_highest_seq
+    fn check_recv_sequence(&self, sequence_number: u64) -> ReplayDecision {
+        self.replay_window.check(sequence_number)
     }
 
-    fn commit_recv_sequence(&mut self, sequence_number: u64) {
-        self.recv_highest_seq = sequence_number;
+    fn commit_recv_sequence(&mut self, sequence_number: u64) -> ReplayDecision {
+        self.replay_window.accept(sequence_number)
     }
 
     fn mark_seen(&mut self) {
@@ -101,8 +103,7 @@ pub async fn run(
     mut session: TunnelSession,
 ) -> Result<()> {
     let mut tun_buf = vec![0u8; session.selected_mtu as usize];
-    let mut udp_buf =
-        vec![0u8; session.selected_mtu as usize + HEADER_LEN + AEAD_TAG_LEN + EXTRA_FRAME_SPACE];
+    let mut udp_buf = vec![0u8; MAX_FRAME_LEN];
     let mut keepalive = interval_at(TokioInstant::now() + KEEPALIVE_INTERVAL, KEEPALIVE_INTERVAL);
     keepalive.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
@@ -116,6 +117,13 @@ pub async fn run(
 
     loop {
         tokio::select! {
+            shutdown = tokio::signal::ctrl_c() => {
+                shutdown?;
+                tracing::info!("shutdown signal received; sending disconnect");
+                send_disconnect(transport, &mut session, DisconnectReason::NormalShutdown).await?;
+                tracing::info!("cleanup hint: if routed mode was enabled, print rollback commands with `rust_network routes ... --rollback`");
+                return Ok(());
+            }
             _ = keepalive.tick() => {
                 if session.is_timed_out(SESSION_TIMEOUT) {
                     return Err(VpnError::SessionTimeout {
@@ -143,6 +151,11 @@ pub async fn run(
             tun_result = tun.read_packet(&mut tun_buf) => {
                 let n = tun_result?;
                 if n == 0 {
+                    continue;
+                }
+
+                if let Err(err) = ipv4::validate(&tun_buf[..n], session.selected_mtu as usize) {
+                    tracing::warn!(error = %err, bytes = n, "dropping invalid IPv4 packet from TUN");
                     continue;
                 }
 
@@ -178,8 +191,30 @@ pub async fn run(
                     }
                 };
 
-                if frame.header.packet_type != PacketType::Data && frame.header.packet_type != PacketType::Keepalive {
-                    tracing::debug!(packet_type = ?frame.header.packet_type, "ignoring non-data frame");
+                if frame.header.packet_type == PacketType::Error {
+                    if frame.header.session_id != 0 && frame.header.session_id != session.session_id {
+                        tracing::warn!(
+                            got = frame.header.session_id,
+                            expected = session.session_id,
+                            "dropping error frame for wrong session"
+                        );
+                        continue;
+                    }
+
+                    match decode_error_frame(&frame) {
+                        Ok(code) => return Err(VpnError::PeerError(code).into()),
+                        Err(err) => {
+                            tracing::warn!(error = %err, "dropping invalid error frame");
+                            continue;
+                        }
+                    }
+                }
+
+                if frame.header.packet_type != PacketType::Data
+                    && frame.header.packet_type != PacketType::Keepalive
+                    && frame.header.packet_type != PacketType::Disconnect
+                {
+                    tracing::debug!(packet_type = ?frame.header.packet_type, "ignoring unsupported tunnel frame");
                     continue;
                 }
 
@@ -192,13 +227,17 @@ pub async fn run(
                     continue;
                 }
 
-                if !session.is_fresh_recv_sequence(frame.header.sequence_number) {
+                match session.check_recv_sequence(frame.header.sequence_number) {
+                    ReplayDecision::Fresh => {}
+                    decision => {
                     tracing::warn!(
                         sequence_number = frame.header.sequence_number,
-                        highest = session.recv_highest_seq,
-                        "dropping replayed or out-of-order frame"
+                        highest = session.replay_window.highest(),
+                        decision = ?decision,
+                        "dropping replayed or stale frame"
                     );
                     continue;
+                    }
                 }
 
                 match frame.header.packet_type {
@@ -213,6 +252,14 @@ pub async fn run(
 
                         session.commit_recv_sequence(frame.header.sequence_number);
                         session.mark_seen();
+                        if let Err(err) = ipv4::validate(&packet, session.selected_mtu as usize) {
+                            tracing::warn!(
+                                error = %err,
+                                bytes = packet.len(),
+                                "dropping decrypted invalid IPv4 packet"
+                            );
+                            continue;
+                        }
                         tun.write_packet(&packet).await?;
 
                         tracing::debug!(
@@ -239,11 +286,42 @@ pub async fn run(
                             "received encrypted keepalive frame"
                         );
                     }
+                    PacketType::Disconnect => {
+                        let reason = match decrypt_disconnect_frame(&frame, &session.recv_key, session.recv_nonce_prefix) {
+                            Ok(reason) => reason,
+                            Err(err) => {
+                                tracing::warn!(error = %err, "dropping undecryptable disconnect frame");
+                                continue;
+                            }
+                        };
+
+                        session.commit_recv_sequence(frame.header.sequence_number);
+                        session.mark_seen();
+                        return Err(VpnError::PeerDisconnected(reason).into());
+                    }
                     _ => unreachable!("packet type was filtered before decrypt"),
                 }
             }
         }
     }
+}
+
+async fn send_disconnect(
+    transport: &UdpTransport,
+    session: &mut TunnelSession,
+    reason: DisconnectReason,
+) -> Result<()> {
+    let sequence_number = session.next_send_sequence();
+    let frame = encrypt_disconnect_frame(
+        session.session_id,
+        sequence_number,
+        &session.send_key,
+        session.send_nonce_prefix,
+        reason,
+    )?;
+    let encoded = encode_frame(&frame);
+    transport.send_to(&encoded, session.peer_addr).await?;
+    Ok(())
 }
 
 #[cfg(test)]
