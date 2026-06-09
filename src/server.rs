@@ -75,7 +75,7 @@ pub(crate) async fn establish_session_with_transport(
     let psk = load_psk(&config.psk_file)?;
 
     let mut buf = [0u8; MAX_UDP_FRAME_LEN];
-    let (client_frame, peer) = recv_frame(&transport, &mut buf).await?;
+    let (client_frame, peer) = recv_frame(transport, &mut buf).await?;
 
     if client_frame.header.packet_type != PacketType::ClientHello {
         bail!(
@@ -116,7 +116,7 @@ pub(crate) async fn establish_session_with_transport(
     tracing::info!(%peer, session_id, "ServerHello sent");
 
     let keys = derive_session_keys(&psk, &client_hello.client_random, &server_random)?;
-    let (auth_frame, auth_peer) = recv_frame(&transport, &mut buf).await?;
+    let (auth_frame, auth_peer) = recv_frame(transport, &mut buf).await?;
 
     if auth_peer != peer {
         bail!("received AuthConfirm from unexpected peer: {auth_peer}");

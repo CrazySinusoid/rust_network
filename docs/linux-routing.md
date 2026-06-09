@@ -1,17 +1,16 @@
 # Linux Routing
 
-This document describes the simple routed VPN / internet gateway mode.
-
-The encrypted tunnel must already work first:
+Use this only after the point-to-point tunnel works:
 
 ```bash
 ping -I tun0 10.8.0.1
 ```
 
-After that, these routing rules let the client send internet traffic through the
-VPN server.
+The goal here is full-tunnel IPv4 routing: the client sends internet traffic to
+the VPN server, and the server forwards it through its normal external
+interface.
 
-## Assumptions
+## Values Used Below
 
 ```text
 VPN subnet:       10.8.0.0/24
@@ -21,15 +20,13 @@ TUN interface:    tun0
 server UDP port:  7000
 ```
 
-Replace:
+Replace these placeholders:
 
-- `SERVER_PUBLIC_IP` with the public/reachable server IP;
-- `OLD_GATEWAY` with the client's original default gateway;
-- `OUT_IFACE` with the server's external internet-facing interface.
+- `SERVER_PUBLIC_IP`: server address reachable from the client;
+- `OLD_GATEWAY`: client's original default gateway;
+- `OUT_IFACE`: server interface that has internet access.
 
-## Find Values
-
-On the client, find the current default gateway before changing routes:
+Find the client gateway before changing routes:
 
 ```bash
 ip route show default
@@ -43,7 +40,7 @@ default via 192.168.1.1 dev wlan0 proto dhcp metric 600
 
 Here `OLD_GATEWAY` is `192.168.1.1`.
 
-On the server, find the external interface:
+Find the server external interface:
 
 ```bash
 ip route show default
@@ -57,24 +54,24 @@ default via 203.0.113.1 dev eth0 proto static
 
 Here `OUT_IFACE` is `eth0`.
 
-## Server Apply
+## Server Side
 
-Run on the server:
-
-```bash
-sudo sysctl -w net.ipv4.ip_forward=1
-sudo iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o OUT_IFACE -j MASQUERADE
-sudo iptables -A FORWARD -i tun0 -o OUT_IFACE -j ACCEPT
-sudo iptables -A FORWARD -i OUT_IFACE -o tun0 -m state --state RELATED,ESTABLISHED -j ACCEPT
-```
-
-The binary can print the same commands:
+Print the commands:
 
 ```bash
 ./target/release/rust_network routes server \
   --vpn-subnet 10.8.0.0/24 \
   --tun-name tun0 \
   --out-iface OUT_IFACE
+```
+
+Apply them manually on the server:
+
+```bash
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o OUT_IFACE -j MASQUERADE
+sudo iptables -A FORWARD -i tun0 -o OUT_IFACE -j ACCEPT
+sudo iptables -A FORWARD -i OUT_IFACE -o tun0 -m state --state RELATED,ESTABLISHED -j ACCEPT
 ```
 
 Example with `eth0`:
@@ -86,17 +83,9 @@ sudo iptables -A FORWARD -i tun0 -o eth0 -j ACCEPT
 sudo iptables -A FORWARD -i eth0 -o tun0 -m state --state RELATED,ESTABLISHED -j ACCEPT
 ```
 
-## Client Apply
+## Client Side
 
-Run on the client:
-
-```bash
-sudo ip route add SERVER_PUBLIC_IP/32 via OLD_GATEWAY
-sudo ip route add 0.0.0.0/1 dev tun0
-sudo ip route add 128.0.0.0/1 dev tun0
-```
-
-The binary can print the same commands:
+Print the commands:
 
 ```bash
 ./target/release/rust_network routes client \
@@ -105,15 +94,23 @@ The binary can print the same commands:
   --tun-name tun0
 ```
 
-The `SERVER_PUBLIC_IP/32` exception is important. Without it, the UDP connection
-to the VPN server can be routed back into the VPN tunnel itself.
+Apply them manually on the client:
 
-The two `/1` routes capture nearly all IPv4 traffic while leaving the old
-default route in place.
+```bash
+sudo ip route add SERVER_PUBLIC_IP/32 via OLD_GATEWAY
+sudo ip route add 0.0.0.0/1 dev tun0
+sudo ip route add 128.0.0.0/1 dev tun0
+```
+
+Do not skip `SERVER_PUBLIC_IP/32 via OLD_GATEWAY`. Without that exception, the
+UDP connection to the VPN server may be routed into the VPN tunnel itself.
+
+The two `/1` routes are a common full-tunnel trick. Together they cover the IPv4
+internet while leaving the original default route in place.
 
 ## Verify
 
-On the client:
+Run on the client:
 
 ```bash
 ip route get SERVER_PUBLIC_IP
@@ -123,24 +120,36 @@ ping 8.8.8.8
 curl https://example.com
 ```
 
-Expected routing:
+Expected result:
 
-- `SERVER_PUBLIC_IP` goes through `OLD_GATEWAY`, not `tun0`;
+- `SERVER_PUBLIC_IP` still goes through `OLD_GATEWAY`;
 - `8.8.8.8` goes through `tun0`;
-- server logs encrypted data frames in both directions.
+- the server logs encrypted data frames in both directions;
+- the server NAT rule sees packets from `10.8.0.2`.
 
-## Server Rollback
+If `ping 8.8.8.8` works but `curl https://example.com` does not, check DNS
+next. DNS configuration is not handled by this project yet.
 
-Run on the server:
+## Rollback
+
+Print client rollback:
 
 ```bash
-sudo iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o OUT_IFACE -j MASQUERADE
-sudo iptables -D FORWARD -i tun0 -o OUT_IFACE -j ACCEPT
-sudo iptables -D FORWARD -i OUT_IFACE -o tun0 -m state --state RELATED,ESTABLISHED -j ACCEPT
-sudo sysctl -w net.ipv4.ip_forward=0
+./target/release/rust_network routes client \
+  --server-ip SERVER_PUBLIC_IP \
+  --tun-name tun0 \
+  --rollback
 ```
 
-The binary can print the same rollback commands:
+Apply on the client:
+
+```bash
+sudo ip route del 128.0.0.0/1 dev tun0
+sudo ip route del 0.0.0.0/1 dev tun0
+sudo ip route del SERVER_PUBLIC_IP/32
+```
+
+Print server rollback:
 
 ```bash
 ./target/release/rust_network routes server \
@@ -150,31 +159,14 @@ The binary can print the same rollback commands:
   --rollback
 ```
 
-Only disable `net.ipv4.ip_forward` if it was disabled before this test.
-
-## Client Rollback
-
-Run on the client:
+Apply on the server:
 
 ```bash
-sudo ip route del 128.0.0.0/1 dev tun0
-sudo ip route del 0.0.0.0/1 dev tun0
-sudo ip route del SERVER_PUBLIC_IP/32
+sudo iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o OUT_IFACE -j MASQUERADE
+sudo iptables -D FORWARD -i tun0 -o OUT_IFACE -j ACCEPT
+sudo iptables -D FORWARD -i OUT_IFACE -o tun0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+sudo sysctl -w net.ipv4.ip_forward=0
 ```
 
-The binary can print the same rollback commands:
-
-```bash
-./target/release/rust_network routes client \
-  --server-ip SERVER_PUBLIC_IP \
-  --tun-name tun0 \
-  --rollback
-```
-
-## Notes
-
-- These commands are intentionally manual for the MVP.
-- The `routes` CLI only prints commands. It does not apply system changes.
-- Later, the CLI can gain an explicit `--apply` mode.
-- DNS is not handled yet. If `ping 8.8.8.8` works but domain names do not, DNS
-  routing/configuration is the next thing to check.
+Only disable `net.ipv4.ip_forward` if it was disabled before the VPN test.
+Shared servers often use forwarding for other workloads.
